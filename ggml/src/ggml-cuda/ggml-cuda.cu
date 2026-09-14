@@ -5406,48 +5406,54 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     return nullptr;
 }
 
-void ggml_cuda_copy_input_async_sm(ggml_backend_t backend, void * src, void * dst, size_t size) {
+void ggml_cuda_copy_input_async_sm(ggml_backend_t backend, void * src, void * dst, size_t size,
+                                   bool src_is_host, bool dst_is_host) {
     ggml_backend_cuda_context * ctx = (ggml_backend_cuda_context *)backend->context;
     cudaStream_t stream = ctx->stream();
 
+    // Per-split activation copies happen ~100x per decode step; cudaPointerGetAttributes
+    // takes a driver lock each call, so trust the caller's buffer-type hints and cache the
+    // host->device mapping instead of re-querying attributes on every copy.
+    static std::mutex cache_mu;
+    static std::unordered_map<void *, void *> host_dev_ptr_cache;
+
+    auto map_host_ptr = [&](void * p, void ** dev) -> bool {
+        if (p == nullptr) {
+            return true;
+        }
+        {
+            std::lock_guard<std::mutex> lock(cache_mu);
+            auto it = host_dev_ptr_cache.find(p);
+            if (it != host_dev_ptr_cache.end()) {
+                *dev = it->second;
+                return *dev != nullptr;
+            }
+        }
+        void * mapped = nullptr;
+        // fails for non-pinned (pageable) host memory -> caller must fall back to memcpy
+        cudaError_t err = cudaHostGetDevicePointer(&mapped, p, 0);
+        if (err != cudaSuccess || mapped == nullptr) {
+            mapped = nullptr;
+        }
+        std::lock_guard<std::mutex> lock(cache_mu);
+        if (host_dev_ptr_cache.size() < 4096) {
+            host_dev_ptr_cache.emplace(p, mapped);
+        }
+        *dev = mapped;
+        return mapped != nullptr;
+    };
+
     void * dev_src = src;
     void * dev_dst = dst;
-    cudaError_t err;
 
-    // Handle Source
-    cudaPointerAttributes src_attrs;
-    err = cudaPointerGetAttributes(&src_attrs, src);
-    if (err == cudaSuccess && src_attrs.type == cudaMemoryTypeHost) {
-        // Host memory, try to register and get device pointer
-        // err = cudaHostRegister(src, size, cudaHostRegisterMapped);
-        // if (err != cudaSuccess && err != cudaErrorHostMemoryAlreadyRegistered) {
-        //      // Fallback
-        //      cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
-        //      return;
-        // }
-        err = cudaHostGetDevicePointer(&dev_src, src, 0);
-        if (err != cudaSuccess) {
-             cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
-             return;
-        }
+    if (src_is_host && !map_host_ptr(src, &dev_src)) {
+        cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
+        return;
     }
 
-    // Handle Destination
-    cudaPointerAttributes dst_attrs;
-    err = cudaPointerGetAttributes(&dst_attrs, dst);
-    if (err == cudaSuccess && dst_attrs.type == cudaMemoryTypeHost) {
-        // Host memory, try to register and get device pointer
-        // err = cudaHostRegister(dst, size, cudaHostRegisterMapped);
-        // if (err != cudaSuccess && err != cudaErrorHostMemoryAlreadyRegistered) {
-        //      // Fallback
-        //      cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
-        //      return;
-        // }
-        err = cudaHostGetDevicePointer(&dev_dst, dst, 0);
-        if (err != cudaSuccess) {
-             cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
-             return;
-        }
+    if (dst_is_host && !map_host_ptr(dst, &dev_dst)) {
+        cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
+        return;
     }
 
     // Launch Kernel

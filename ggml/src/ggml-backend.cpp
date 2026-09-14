@@ -1740,10 +1740,12 @@ static enum ggml_status copy_split_input(ggml_backend_sched_t sched, struct ggml
         bool dst_is_host = ggml_backend_buffer_is_host(input_cpy->buffer);
 
         if (dst_is_cuda && src_is_host) {
-            ggml_cuda_copy_input_async_sm(split_backend, input->data, input_cpy->data, ggml_nbytes(input));
-            
+            ggml_cuda_copy_input_async_sm(split_backend, input->data, input_cpy->data, ggml_nbytes(input),
+                                          /*src_is_host = */src_is_host, /*dst_is_host = */dst_is_host);
+
         } else if (src_is_cuda && dst_is_host) {
-            ggml_cuda_copy_input_async_sm(input_backend, input->data, input_cpy->data, ggml_nbytes(input));
+            ggml_cuda_copy_input_async_sm(input_backend, input->data, input_cpy->data, ggml_nbytes(input),
+                                          /*src_is_host = */src_is_host, /*dst_is_host = */dst_is_host);
             ggml_backend_synchronize(input_backend);
         } else {
             assert(false);
