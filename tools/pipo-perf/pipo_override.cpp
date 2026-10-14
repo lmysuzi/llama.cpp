@@ -81,7 +81,7 @@ static vector<pipo_profile_entry> load_pipo_profile(const string & json_path) {
 }
 
 static void print_usage(const char * argv0) {
-	cerr << "Usage: " << argv0 << " [pipo_profile.json] [-c <output-dir>] [-r <mem-ratio>] [--moe]\n";
+	cerr << "Usage: " << argv0 << " [pipo_profile.json] [-c <output-dir>] [-r <mem-ratio> | --mem-mib <MiB>] [--moe]\n";
 	cerr << "Defaults: profile=examples/pipo-alg/alg_cfg/pipo_profile.json, output=examples/pipo-alg/alg_cfg\n";
 }
 
@@ -209,6 +209,7 @@ int main(int argc, char ** argv) {
 	string profile_path = "examples/pipo-alg/alg_cfg/pipo_profile.json";
 	string output_dir = "examples/pipo-alg/alg_cfg";
 	double mem_ratio = 0.7;
+	int explicit_mem_mib = 0;
 	bool is_moe = false;
 	for (int i = 1; i < argc; ++i) {
 		const string arg = argv[i];
@@ -218,6 +219,9 @@ int main(int argc, char ** argv) {
 			profile_path = argv[++i];
 		} else if ((arg == "-r" || arg == "--mem-ratio") && i + 1 < argc) {
 			mem_ratio = stod(argv[++i]);
+		} else if (arg == "--mem-mib" && i + 1 < argc) {
+			explicit_mem_mib = stoi(argv[++i]);
+			if (explicit_mem_mib <= 0) throw runtime_error("--mem-mib must be positive");
 		} else if (arg == "--moe" || arg == "-moe") {
 			is_moe = true;
 		} else if (profile_path.empty()) {
@@ -261,7 +265,7 @@ int main(int argc, char ** argv) {
 		return 0;
 	}
 
-	const int m_total = get_gpu_budget_mib(mem_ratio);
+	const int m_total = explicit_mem_mib > 0 ? explicit_mem_mib : get_gpu_budget_mib(mem_ratio);
 
 	const vector<bound_profile_entry> bound_profiles = bind_bias_profiles(profiles);
 
@@ -321,7 +325,7 @@ int main(int argc, char ** argv) {
 	}
 
 	const double neg_inf = -numeric_limits<double>::infinity();
-	cerr << "GPU budget: " << m_total << " MiB (" << mem_ratio * 100.0 << "% of current free memory), "
+	cerr << "GPU budget: " << m_total << " MiB (" << (explicit_mem_mib > 0 ? "explicit" : "fraction of current free memory") << "), "
 		 << "forced CPU: " << forced_cpu_names.size() << ", forced GPU: " << forced_gpu_names.size()
 		 << ", DP budget: " << dp_m << " MiB\n";
 

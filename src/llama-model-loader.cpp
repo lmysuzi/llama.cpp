@@ -921,6 +921,11 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], 512, w->ne[2], w->ne[3]);
                 op_tensor = ggml_mul_mat(ctx, w, b);
             } break;
+        case GGML_OP_OUT_PROD:
+            {
+                ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 512, w->ne[1], w->ne[2], w->ne[3]);
+                op_tensor = ggml_out_prod(ctx, w, b);
+            } break;
         case GGML_OP_MUL_MAT_ID:
             {
                 const int n_expert_used = hparams.n_expert_used;

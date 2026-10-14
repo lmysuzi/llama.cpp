@@ -415,16 +415,17 @@ struct gguf_context * gguf_init_from_file_ptr(FILE * file, struct gguf_init_para
             return nullptr;
         }
 
-        for (uint32_t i = 0; i < magic.size(); i++) {
-            if (magic[i] != GGUF_MAGIC[i]) {
-                char c0 = isprint(magic[0]) ? magic[0] : '?';
-                char c1 = isprint(magic[1]) ? magic[1] : '?';
-                char c2 = isprint(magic[2]) ? magic[2] : '?';
-                char c3 = isprint(magic[3]) ? magic[3] : '?';
-                GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF'\n", __func__, c0, c1, c2, c3);
-                gguf_free(ctx);
-                return nullptr;
-            }
+        const bool is_gguf = std::equal(magic.begin(), magic.end(), GGUF_MAGIC);
+        const bool is_powerinfer = std::equal(magic.begin(), magic.end(), GGUF_POWERINFER_MAGIC);
+
+        if (!is_gguf && !is_powerinfer) {
+            char c0 = isprint(magic[0]) ? magic[0] : '?';
+            char c1 = isprint(magic[1]) ? magic[1] : '?';
+            char c2 = isprint(magic[2]) ? magic[2] : '?';
+            char c3 = isprint(magic[3]) ? magic[3] : '?';
+            GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF' or 'PWRI'\n", __func__, c0, c1, c2, c3);
+            gguf_free(ctx);
+            return nullptr;
         }
     }
 

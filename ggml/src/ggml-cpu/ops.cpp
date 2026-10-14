@@ -4327,6 +4327,43 @@ static void ggml_compute_forward_out_prod_q_f32(
     }
 }
 
+// Partition FP16 outer products over output columns as well as tokens. In
+// single-token inference, partitioning only the output rows leaves all but one
+// worker idle. Each tile owns its output and preserves the accumulation order.
+static void ggml_compute_forward_out_prod_f16(
+        const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * a = dst->src[0];
+    const ggml_tensor * b = dst->src[1];
+    GGML_ASSERT(a->type == GGML_TYPE_F16 && b->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->nb[0] == sizeof(ggml_fp16_t) && dst->nb[0] == sizeof(float));
+    GGML_ASSERT(a->ne[1] == b->ne[1] && dst->ne[0] == a->ne[0] && dst->ne[1] == b->ne[0]);
+    GGML_ASSERT(dst->ne[2] == b->ne[2] && dst->ne[3] == b->ne[3]);
+    GGML_ASSERT(dst->ne[2] % a->ne[2] == 0 && dst->ne[3] % a->ne[3] == 0);
+    const int64_t tile = 512;
+    const int64_t tiles = (dst->ne[0] + tile - 1) / tile;
+    const int64_t tasks = tiles * dst->ne[1] * dst->ne[2] * dst->ne[3];
+    const int64_t d2 = dst->ne[2] / a->ne[2], d3 = dst->ne[3] / a->ne[3];
+    float * work = (float *) params->wdata + (dst->ne[0] + CACHE_LINE_SIZE_F32) * params->ith;
+    for (int64_t task = params->ith; task < tasks; task += params->nth) {
+        const int64_t x = (task % tiles) * tile;
+        const int64_t count = MIN(tile, dst->ne[0] - x);
+        const int64_t row = task / tiles;
+        const int64_t i1 = row % dst->ne[1];
+        const int64_t i2 = (row / dst->ne[1]) % dst->ne[2];
+        const int64_t i3 = row / (dst->ne[1] * dst->ne[2]);
+        float * out = (float *) ((char *) dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]) + x;
+        ggml_vec_set_f32(count, out, 0.0f);
+        for (int64_t k = 0; k < a->ne[1]; ++k) {
+            const ggml_fp16_t * weight = (const ggml_fp16_t *) ((const char *) a->data +
+                k*a->nb[1] + (i2/d2)*a->nb[2] + (i3/d3)*a->nb[3]) + x;
+            const float value = *(const float *) ((const char *) b->data +
+                i1*b->nb[0] + k*b->nb[1] + i2*b->nb[2] + i3*b->nb[3]);
+            ggml_fp16_to_fp32_row(weight, work, count);
+            ggml_vec_mad_f32(count, out, work, value);
+        }
+    }
+}
+
 void ggml_compute_forward_out_prod(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -4362,10 +4399,8 @@ void ggml_compute_forward_out_prod(
                 ggml_compute_forward_out_prod_q_f32(params, dst);
             } break;
         case GGML_TYPE_F16:
-            {
-                GGML_ABORT("fatal error"); // todo
-                // ggml_compute_forward_out_prod_f16_f32(params, dst);
-            }
+            ggml_compute_forward_out_prod_f16(params, dst);
+            break;
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_out_prod_f32(params, dst);

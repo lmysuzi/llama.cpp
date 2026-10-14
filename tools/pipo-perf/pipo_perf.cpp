@@ -2,6 +2,7 @@
 #include "pipo_op_perf.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 #include "llama-model.h"
 
@@ -54,6 +55,7 @@ struct bench_op_case {
 	vector<uint8_t>            op_param_bytes;
 	vector<ggml_type>          src_types;
 	vector<vector<int64_t>>    src_nes;
+	vector<vector<size_t>>     src_nbs;
 	string                     op_name;
 	string                     op_desc;
 };
@@ -96,6 +98,7 @@ static bench_op_case make_bench_op_case(const ggml_tensor * node) {
 		}
 		op.src_types.push_back(src->type);
 		op.src_nes.emplace_back(src->ne, src->ne + GGML_MAX_DIMS);
+		op.src_nbs.emplace_back(src->nb, src->nb + GGML_MAX_DIMS);
 	}
 
 	return op;
@@ -127,6 +130,12 @@ static string make_bench_signature(const bench_op_case & op) {
 			signature += 'x';
 		}
 	}
+	for (size_t i = 0; i < op.src_types.size(); ++i) {
+		signature += "#" + to_string(op.src_types[i]);
+		for (auto n : op.src_nes[i]) signature += ":" + to_string(n);
+		for (auto n : op.src_nbs[i]) signature += ":" + to_string(n);
+	}
+	for (auto v : op.op_param_bytes) signature += ":" + to_string(v);
 	return signature;
 }
 
@@ -345,6 +354,7 @@ static double run_single_bench(const bench_op_case & op, ggml_backend_t backend,
 	vector<ggml_tensor *> src_tensors(op.src_types.size());
 	for (size_t i = 0; i < op.src_types.size(); ++i) {
 		src_tensors[i] = ggml_new_tensor(ctx, op.src_types[i], op.src_nes[i].size(), op.src_nes[i].data());
+		std::copy(op.src_nbs[i].begin(), op.src_nbs[i].end(), src_tensors[i]->nb);
 	}
 
 	ggml_tensor * result = ggml_new_tensor(ctx, op.node_type, op.op_shape.size(), op.op_shape.data());
@@ -624,6 +634,7 @@ int main(int argc, char ** argv) {
 	}
 
 	ggml_backend_t gpu_backend = nullptr;
+	ggml_backend_cpu_set_n_threads(cpu_backend, n_threads);
 	for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
 		ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 		if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {

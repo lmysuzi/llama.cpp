@@ -3293,7 +3293,15 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 
                         if (n_expert == 0) {
                             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
-                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, TENSOR_NOT_REQUIRED);
+                            if (layer.ffn_down == nullptr) {
+                                layer.ffn_down_t = create_tensor(tn(LLM_TENSOR_FFN_DOWN_T, "weight", i), {n_embd, n_ff}, 0);
+
+                                // PowerInfer's predictor is only needed for sparse execution. Dense ReluLLaMA
+                                // evaluates every neuron, so account for these tensors but do not allocate them.
+                                (void) create_tensor(tn(LLM_TENSOR_MLP_PRED_FC1, "weight", i), {1}, TENSOR_SKIP);
+                                (void) create_tensor(tn(LLM_TENSOR_MLP_PRED_FC2, "weight", i), {1}, TENSOR_SKIP);
+                            }
                             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
 
                             // optional MLP bias
@@ -8261,7 +8269,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         if (n_expert == 0) {
                             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
-                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, TENSOR_NOT_REQUIRED);
+                            if (layer.ffn_down == nullptr) {
+                                layer.ffn_down_t = create_tensor(tn(LLM_TENSOR_FFN_DOWN_T, "weight", i), {n_embd, n_ff}, 0);
+
+                                // Predictor weights select active neurons in PowerInfer's sparse path.
+                                // Dense execution evaluates all neurons and does not need to allocate them.
+                                (void) create_tensor(tn(LLM_TENSOR_MLP_PRED_FC1, "weight", i), {1}, TENSOR_SKIP);
+                                (void) create_tensor(tn(LLM_TENSOR_MLP_PRED_FC2, "weight", i), {1}, TENSOR_SKIP);
+                            }
                             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
 
                             // optional MLP bias

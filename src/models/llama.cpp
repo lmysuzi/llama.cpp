@@ -92,12 +92,21 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
+            const bool is_relullama = model.layers[il].ffn_down_t != nullptr;
+
             cur = build_ffn(cur,
                     model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
                     model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
                     NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, il);
+                    is_relullama ? LLM_FFN_RELU : LLM_FFN_SILU, LLM_FFN_PAR, il);
+
+            if (is_relullama) {
+                // The PowerInfer file stores down_proj transposed so sparse inference can
+                // accumulate selected neuron rows. OUT_PROD evaluates the same projection
+                // densely without materializing a second copy of the weight.
+                cur = ggml_out_prod(ctx0, model.layers[il].ffn_down_t, ggml_transpose(ctx0, cur));
+            }
             cb(cur, "ffn_out", il);
         } else {
             // MoE branch
@@ -150,6 +159,19 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
     }
 
     ggml_build_forward_expand(gf, cur);
+
+    if (!model.layers.empty() && model.layers[0].ffn_down_t != nullptr) {
+        // The PWRI dense adapter is checked against an independent FP32
+        // reference. Avoid the CUDA default FP16 vector accumulators: their
+        // rounding can amplify through this ReLU model. Weights and KV stay
+        // FP16, and both dense comparison systems share this precision policy.
+        for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+            ggml_tensor * node = ggml_graph_node(gf, i);
+            if (node->op == GGML_OP_MUL_MAT && node->src[0]->type == GGML_TYPE_F16) {
+                ggml_mul_mat_set_prec(node, GGML_PREC_F32);
+            }
+        }
+    }
 }
 
 template struct llm_build_llama<false>;
